@@ -1,0 +1,15 @@
+{
+  "name": "Ben's Bike Trip",
+  "short_name": "Bike Trip",
+  "description": "Big air. Bad decisions. One more run.",
+  "start_url": "/BensBikeTrip/",
+  "scope": "/BensBikeTrip/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#172238",
+  "theme_color": "#172238",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

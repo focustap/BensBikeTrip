@@ -2,11 +2,65 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#101c30" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#172238" />
+    <meta name="description" content="Go further. Fly higher. Probably land it. A tiny, stunt-filled motorcycle road trip." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ben's Bike Trip" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <title>Ben's Bike Trip</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <canvas id="world" aria-label="Side-scrolling motorcycle game"></canvas>
+      <div class="noise" aria-hidden="true"></div>
+      <header class="brandline">
+        <span class="brandmark">BT<span class="dot">.</span></span>
+        <span class="brandline-label">A VERY QUESTIONABLE ADVENTURE</span>
+        <span class="version">EARLY BUILD <span>0.1</span></span>
+      </header>
+
+      <section id="menu" class="screen menu-screen">
+        <div class="hero">
+          <p class="eyebrow"><span class="eyebrow-line"></span> START YOUR ENGINES</p>
+          <h1>BEN'S<br/><em>BIKE TRIP</em><span class="star">✳</span></h1>
+          <p class="tagline">Big air. Bad decisions. One more run.</p>
+          <div class="hero-actions">
+            <button id="play" class="primary-btn"><span>LET'S RIDE</span><span class="btn-arrow">↗</span></button>
+            <button id="garage" class="secondary-btn">THE GARAGE <span>↗</span></button>
+          </div>
+          <div class="menu-metrics">
+            <div><span>PERSONAL BEST</span><strong id="menu-best">0 <small>m</small></strong></div>
+            <div><span>TOTAL COINS</span><strong id="menu-coins">0 <small>◈</small></strong></div>
+          </div>
+        </div>
+        <div class="menu-tip">← LEAN BACK <span>·</span> LEAN FORWARD →<small>HOLD TO ROTATE · SPACE TO BOOST</small></div>
+      </section>
+
+      <section id="garage-screen" class="screen garage-screen hidden">
+        <div class="panel garage-panel">
+          <div class="panel-header"><div><p class="eyebrow">BROWSE THE FLEET</p><h2>THE GARAGE<span>.</span></h2></div><button id="garage-back" class="exit-btn">✕</button></div>
+          <div id="bike-list" class="bike-list"></div>
+          <p class="garage-footnote">Coins are earned during rides and kept after a crash. Different bikes change speed, handling, and wheel size.</p>
+        </div>
+      </section>
+
+      <section id="hud" class="hud hidden" aria-live="off">
+        <div class="hud-left"><div class="hud-label">DISTANCE</div><div class="hud-distance"><span id="distance">0</span><small>m</small></div><div class="hud-sub">BEST <span id="best">0</span>m</div></div>
+        <div class="hud-right"><div class="coin-hud"><span class="coin-symbol">◈</span><span id="run-coins">0</span></div><button id="pause" class="pause-btn" aria-label="Pause game">Ⅱ</button></div>
+        <div class="boost-meter"><div class="boost-top"><span>BOOST</span><span id="boost-label">50%</span></div><div class="boost-track"><div id="boost-fill" class="boost-fill"></div></div></div>
+        <div id="stunt" class="stunt hidden" role="status"></div>
+        <div class="controls"><button id="lean-left" class="tilt tilt-left" aria-label="Lean backward"><span class="tilt-icon">↶</span><span>LEAN BACK</span></button><button id="boost" class="boost-button" aria-label="Boost"><span>⚡</span>BOOST</button><button id="lean-right" class="tilt tilt-right" aria-label="Lean forward"><span class="tilt-icon">↷</span><span>LEAN FORWARD</span></button></div>
+      </section>
+
+      <section id="pause-screen" class="screen modal-screen hidden"><div class="panel modal-panel"><p class="eyebrow">TAKE FIVE</p><h2>PAUSED<span>.</span></h2><p>The hills aren't going anywhere.</p><button id="resume" class="primary-btn">KEEP RIDING <span class="btn-arrow">↗</span></button><button id="quit" class="secondary-btn">BACK TO MENU</button></div></section>
+
+      <section id="crash-screen" class="screen modal-screen hidden"><div class="panel modal-panel crash-panel"><p class="eyebrow">WELL, THAT HAPPENED</p><h2>WHAT A<br/><em>WIPEOUT.</em></h2><div class="results"><div><span>DISTANCE</span><strong><span id="final-distance">0</span> <small>m</small></strong></div><div><span>COINS COLLECTED</span><strong><span id="final-coins">0</span> <small>◈</small></strong></div></div><p id="record-label" class="record-label hidden">✳ NEW PERSONAL BEST!</p><button id="retry" class="primary-btn">RIDE AGAIN <span class="btn-arrow">↗</span></button><button id="crash-menu" class="secondary-btn">BACK TO MENU</button></div></section>
+      <div id="rotate" class="rotate-overlay"><div class="phone-icon">▯</div><h2>TURN IT SIDEWAYS</h2><p>This road trip is better in landscape mode.</p></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
