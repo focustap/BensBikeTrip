@@ -37,75 +37,147 @@ export interface BikeState {
   dead: boolean;
   collected: Set<number>;
   lastBonus: number;
-  nextLaunchX: number;
-}
-
-export function newBike(): BikeState {
-  return { x: 145, y: terrainY(145) - 62, vx: 230, vy: 0, angle: 0, av: 0, wheelSpin: 0, onGround: true, airtime: 0, airRotation: 0, boost: 55, totalCoins: 0, distance: 0, dead: false, collected: new Set(), lastBonus: 0, nextLaunchX: 1480 };
+  takeoffGrace: number;
+  launchCooldown: number;
 }
 
 const GRAVITY = 1270;
+const MAX_WHEELIE = 0.95;
+const MAX_STOPPIE = 0.58;
 
-/** Lightweight two-contact suspension solver for a side-view arcade motorcycle. */
+const clamp = (v: number, low: number, high: number) => Math.max(low, Math.min(high, v));
+const angleDelta = (from: number, to: number) => Math.atan2(Math.sin(to - from), Math.cos(to - from));
+
+/**
+ * Ground height for the bike's center, not an impulse or a suspension force.
+ * Keeping *both* tires above the road and allowing one to lift is what makes
+ * grounded wheelies possible without vibrating or catapulting the motorcycle.
+ */
+function supportY(x: number, angle: number, scale: number): number {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const ax = 40 * scale, ay = 27 * scale, radius = 17 * scale;
+  let highestSurface = Infinity;
+  for (const offset of [-ax, ax]) {
+    const px = x + c * offset - s * ay;
+    const ry = s * offset + c * ay;
+    highestSurface = Math.min(highestSurface, terrainY(px) - radius - ry);
+  }
+  return highestSurface;
+}
+
+function roadAngle(x: number, scale: number): number {
+  const width = 40 * scale;
+  return Math.atan2(terrainY(x + width) - terrainY(x - width), 2 * width);
+}
+
+/** The tire actually holding the bike up determines the launch slope. */
+function contactX(x: number, angle: number, scale: number): number {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const ax = 40 * scale, ay = 27 * scale, radius = 17 * scale;
+  let bestY = Infinity;
+  let bestX = x;
+  for (const offset of [-ax, ax]) {
+    const px = x + c * offset - s * ay;
+    const ry = s * offset + c * ay;
+    const possibleCenter = terrainY(px) - radius - ry;
+    if (possibleCenter < bestY) { bestY = possibleCenter; bestX = px; }
+  }
+  return bestX;
+}
+
+function roadCurvature(x: number): number {
+  const h = 35;
+  return (terrainY(x - h) - 2 * terrainY(x) + terrainY(x + h)) / (h * h);
+}
+
+export function newBike(wheelScale = 1): BikeState {
+  const x = 145;
+  const angle = roadAngle(x, wheelScale);
+  return {
+    x, y: supportY(x, angle, wheelScale), vx: 230, vy: 0, angle, av: 0,
+    wheelSpin: 0, onGround: true, airtime: 0, airRotation: 0,
+    boost: 55, totalCoins: 0, distance: 0, dead: false,
+    collected: new Set(), lastBonus: 0, takeoffGrace: 0, launchCooldown: 0,
+  };
+}
+
+/**
+ * Stable, arcade-style wheel-contact physics. A grounded tire supports the bike
+ * without a giant spring impulse; momentum only takes over when it leaves a hill.
+ * Holding lean-back genuinely raises the front tire, even while riding on land.
+ */
 export function stepBike(
   b: BikeState, spec: BikeSpec, seconds: number, lean: number, boostPressed: boolean,
 ): { coin: number; flip: number; crashed: boolean; launch: boolean } {
   const dt = Math.min(seconds, 1 / 40);
-  const wheelRadius = 17 * spec.wheelScale;
-  const wheelX = 40 * spec.wheelScale;
-  const wheelY = 27 * spec.wheelScale;
+  b.launchCooldown = Math.max(0, b.launchCooldown - dt);
   const wasGrounded = b.onGround;
-  const previousAngle = b.angle;
+  const oldAngle = b.angle;
   const turbo = boostPressed && b.boost > 0;
   const targetSpeed = 510 * spec.power * (turbo ? 1.52 : 1);
-  b.boost = Math.max(0, Math.min(100, b.boost + (turbo ? -34 : 1.35) * dt));
+  b.boost = clamp(b.boost + (turbo ? -34 : 1.35) * dt, 0, 100);
 
-  // Pedal-free arcade throttle and aerodynamic drag.
-  b.vx += (targetSpeed - b.vx) * (wasGrounded ? 1.5 : 0.23) * dt;
-  b.vy += GRAVITY * dt;
-  b.av += lean * (wasGrounded ? 4.6 : 12.3) * spec.handling * dt;
-  if (!wasGrounded && lean === 0) b.av -= Math.sin(b.angle) * 11 * dt;
-  b.av *= Math.exp(-dt * (wasGrounded ? 1.7 : (lean === 0 ? 1.85 : 0.3)));
+  // Throttle accelerates on the road, while air travel preserves momentum.
+  b.vx += (targetSpeed - b.vx) * (wasGrounded ? 1.55 : 0.1) * dt;
+  b.vx = clamp(b.vx, 80, targetSpeed * 1.4);
 
+  const lastSupport = supportY(b.x, b.angle, spec.wheelScale);
   b.x += b.vx * dt;
-  b.y += b.vy * dt;
-  b.angle += b.av * dt;
-  b.wheelSpin += (b.vx * dt) / Math.max(10, wheelRadius);
+  let launch = false;
 
-  let contacts = 0;
-  let maxPenetration = 0;
-  for (const wx of [-wheelX, wheelX]) {
-    const cos = Math.cos(b.angle);
-    const sin = Math.sin(b.angle);
-    const rx = cos * wx - sin * wheelY;
-    const ry = sin * wx + cos * wheelY;
-    const px = b.x + rx;
-    const py = b.y + ry;
-    const penetration = py + wheelRadius - terrainY(px);
-    if (penetration <= 0) continue;
-    contacts++;
-    maxPenetration = Math.max(maxPenetration, penetration);
-    const slope = terrainSlope(px);
-    const nx = slope / Math.sqrt(1 + slope * slope);
-    const ny = -1 / Math.sqrt(1 + slope * slope);
-    const vxAtWheel = b.vx - b.av * ry;
-    const vyAtWheel = b.vy + b.av * rx;
-    const approach = -(vxAtWheel * nx + vyAtWheel * ny);
-    const force = Math.max(0, penetration * 74 + approach * 8);
-    b.vx += nx * force * dt;
-    b.vy += ny * force * dt;
-    b.av += ((rx * ny - ry * nx) * force / 2400) * dt;
+  if (wasGrounded) {
+    // Input is a *pitch target*, not a weak force fighting the ground solver.
+    // Negative pitch lifts the front wheel; positive pitch lifts the rear wheel.
+    const pitch = lean < 0 ? lean * MAX_WHEELIE : lean * MAX_STOPPIE;
+    const desired = clamp(roadAngle(b.x, spec.wheelScale) + pitch, -1.25, 1.15);
+    const error = angleDelta(b.angle, desired);
+    b.av += (34 * error - 10.5 * b.av) * spec.handling * dt;
+    b.av = clamp(b.av, -4.7 * spec.handling, 4.7 * spec.handling);
+    b.angle += b.av * dt;
+
+    const ground = supportY(b.x, b.angle, spec.wheelScale);
+    const tireX = contactX(b.x, b.angle, spec.wheelScale);
+    const groundSpeed = terrainSlope(tireX) * b.vx;
+
+    // A convex crest at sufficient speed is an actual jump. There are no
+    // scripted launch zones or invisible upward velocity injections.
+    const outwardAccel = roadCurvature(tireX) * b.vx * b.vx;
+    if (b.launchCooldown <= 0 && outwardAccel > GRAVITY * 1.04 && groundSpeed < -65 && ground > lastSupport - 5) {
+      b.onGround = false;
+      b.vy = clamp(groundSpeed, -800, 800);
+      b.y = ground;
+      b.takeoffGrace = 0.07;
+      b.launchCooldown = 0.24;
+      launch = true;
+    } else {
+      b.onGround = true;
+      b.y = ground;
+      b.vy = clamp(groundSpeed, -900, 900);
+    }
+  } else {
+    b.takeoffGrace = Math.max(0, b.takeoffGrace - dt);
+    b.vy = Math.min(1450, b.vy + GRAVITY * dt);
+    b.y += b.vy * dt;
+    b.av += lean * 17 * spec.handling * dt;
+    if (!lean) b.av *= Math.exp(-0.42 * dt);
+    b.av = clamp(b.av, -9.5 * spec.handling, 9.5 * spec.handling);
+    b.angle += b.av * dt;
+
+    const ground = supportY(b.x, b.angle, spec.wheelScale);
+    if (b.y >= ground && (b.takeoffGrace <= 0 || b.y - ground > 6)) {
+      const landingSpeed = terrainSlope(contactX(b.x, b.angle, spec.wheelScale)) * b.vx;
+      // Never turn penetration into a rocket-like upward kick.
+      b.y = ground;
+      b.vy = clamp(landingSpeed, -900, 900);
+      b.onGround = true;
+    }
   }
-  b.onGround = contacts > 0;
-  if (maxPenetration > 22) b.y -= (maxPenetration - 22) * 0.38;
-  b.vx = Math.max(80, Math.min(b.vx, targetSpeed * 1.42));
-  b.vy = Math.max(-1100, Math.min(b.vy, 1200));
-  b.av = Math.max(-12, Math.min(b.av, 12));
+  b.wheelSpin += b.vx * dt / (17 * spec.wheelScale);
 
   let flip = 0;
   if (!b.onGround) {
     b.airtime += dt;
-    b.airRotation += b.angle - previousAngle;
+    b.airRotation += b.angle - oldAngle;
   } else if (!wasGrounded && b.airtime > 0.25) {
     flip = Math.floor(Math.abs(b.airRotation) / (Math.PI * 2 - 0.38));
     if (flip > 0) {
@@ -118,18 +190,6 @@ export function stepBike(
   } else if (b.onGround) {
     b.airtime = 0;
     b.airRotation = 0;
-  }
-
-  // Arcade launch zones give enough hang time for full rotations, even on gentle hills.
-  let launch = false;
-  if (b.onGround && b.x >= b.nextLaunchX) {
-    b.vy = Math.min(b.vy, -770);
-    b.av = 0;
-    b.onGround = false;
-    b.airtime = 0;
-    b.airRotation = 0;
-    b.nextLaunchX += 2800;
-    launch = true;
   }
 
   let coin = 0;
@@ -146,12 +206,13 @@ export function stepBike(
   }
 
   b.distance = Math.max(b.distance, Math.floor(Math.max(0, b.x - 145) / 6));
-  // Rider head and handlebars are vulnerable to being driven into the hill.
-  const headX = b.x + Math.sin(b.angle) * 52;
-  const headY = b.y - Math.cos(b.angle) * 53;
-  const riderHit = headY > terrainY(headX) - 5;
-  const upsideDown = Math.cos(b.angle) < -0.48;
-  const crashed = riderHit || (b.onGround && upsideDown && maxPenetration > 8);
+  // Check the actual drawn rider head rather than a different imaginary point.
+  const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
+  const headX = b.x - 16 * spec.wheelScale * cos + 55 * spec.wheelScale * sin;
+  const headY = b.y - 16 * spec.wheelScale * sin - 55 * spec.wheelScale * cos;
+  const riderHit = headY + 10 * spec.wheelScale > terrainY(headX);
+  const upsideDown = cos < -0.5;
+  const crashed = riderHit || (b.onGround && upsideDown);
   if (crashed) b.dead = true;
   return { coin, flip, crashed, launch };
 }
