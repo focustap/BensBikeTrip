@@ -60,9 +60,7 @@ function show(next: Screen): void {
 function resetControls(): void { touchLeft = touchRight = touchBoost = false; keyDown.clear(); }
 function ride(): void {
   spec = BIKES.find(b => b.id === save.selected) ?? BIKES[0];
-  bike = newBike();
-  // Shorter bike needs to start closer to the ground.
-  bike.y += (1 - spec.wheelScale) * 44;
+  bike = newBike(spec.wheelScale);
   accumulator = 0;
   gameTime = 0;
   show('play');
