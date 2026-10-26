@@ -1,3 +1,5 @@
+/** Shared tessellation for collision chains and the rendered road surface. */
+export const TERRAIN_STEP = 8;
 /** Deterministic terrain: the same hills on every run for a fair first prototype. */
 export function terrainY(x: number): number {
   const u = Math.max(0, x - 430);

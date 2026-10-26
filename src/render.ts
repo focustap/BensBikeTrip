@@ -1,5 +1,6 @@
-import { BikeSpec, BikeState } from './physics';
-import { coinPosition, seeded, terrainSlope, terrainY } from './terrain';
+import type { BikeSpec, BikeState } from './physics';
+import { BIKE_GEOMETRY as G } from './geometry';
+import { coinPosition, seeded, TERRAIN_STEP, terrainSlope, terrainY } from './terrain';
 
 const H = 720;
 export class GameRenderer {
@@ -47,7 +48,12 @@ export class GameRenderer {
     if (running) this.drawBike(bike, spec);
     else {
       const x = this.width * 0.77;
-      this.drawBike({ ...bike, x, y: terrainY(x) - (44 * spec.wheelScale + 15), angle: Math.atan(terrainSlope(x)), wheelSpin: this.time * 0.45 }, spec);
+      const y = terrainY(x) - (48 * spec.wheelScale + 1), angle = Math.atan(terrainSlope(x));
+      this.drawBike({ ...bike, x, y, angle, wheels: [-1, 1].map(side => ({
+        x: x + (side*G.axleX*Math.cos(angle) - G.axleY*Math.sin(angle))*spec.wheelScale,
+        y: y + (side*G.axleX*Math.sin(angle) + G.axleY*Math.cos(angle))*spec.wheelScale,
+        angle: this.time*0.45, grounded: false,
+      })) as BikeState['wheels'] }, spec);
     }
     c.restore();
     this.vignette();
@@ -103,17 +109,17 @@ export class GameRenderer {
 
   private drawTerrain(): void {
     const c = this.ctx;
-    const minX = Math.floor(this.camera / 14) * 14 - 28;
+    const minX = Math.floor(this.camera / TERRAIN_STEP) * TERRAIN_STEP - 32;
     const maxX = this.camera + this.width + 28;
     c.beginPath(); c.moveTo(minX, H + 100);
-    for (let x = minX; x <= maxX + 14; x += 14) c.lineTo(x, terrainY(x));
+    for (let x = minX; x <= maxX + 14; x += TERRAIN_STEP) c.lineTo(x, terrainY(x));
     c.lineTo(maxX + 14, H + 100); c.closePath();
     const soil = c.createLinearGradient(0, 440, 0, H);
     soil.addColorStop(0, '#83b668'); soil.addColorStop(0.15, '#547d60'); soil.addColorStop(1, '#254e50');
     c.fillStyle = soil; c.fill();
     c.lineWidth = 11; c.strokeStyle = '#b8d78a';
     c.beginPath();
-    for (let x = minX; x <= maxX + 14; x += 10) {
+    for (let x = minX; x <= maxX + 14; x += TERRAIN_STEP) {
       if (x === minX) c.moveTo(x, terrainY(x)); else c.lineTo(x, terrainY(x));
     }
     c.stroke();
@@ -168,38 +174,51 @@ export class GameRenderer {
     const c = this.ctx;
     c.save(); c.translate(b.x, b.y); c.rotate(b.angle);
     const s = spec.wheelScale;
-    const wx = 40 * s; const wy = 27 * s; const r = 17 * s;
+    const r = G.tireRadius * s;
+    const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
+    const axles = b.wheels.map(w => ({
+      x: (w.x-b.x)*cos + (w.y-b.y)*sin,
+      y: -(w.x-b.x)*sin + (w.y-b.y)*cos,
+      angle: w.angle-b.angle,
+    }));
     c.shadowColor = 'rgba(18,40,44,.15)'; c.shadowBlur = 8;
-    for (const x of [-wx, wx]) {
-      c.save(); c.translate(x, wy); c.rotate(b.wheelSpin);
-      c.fillStyle = '#1d3139'; c.beginPath(); c.arc(0, 0, r + 4, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#ddf1e8'; c.beginPath(); c.arc(0, 0, r - 3, 0, Math.PI * 2); c.fill();
+    for (const axle of axles) {
+      c.save(); c.translate(axle.x, axle.y); c.rotate(axle.angle);
+      c.fillStyle = '#1d3139'; c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#ddf1e8'; c.beginPath(); c.arc(0, 0, r - 7*s, 0, Math.PI * 2); c.fill();
       c.strokeStyle = '#49616a'; c.lineWidth = 2;
       for (let j = 0; j < 6; j++) {
         const a = j * Math.PI / 3;
-        c.beginPath(); c.moveTo(0, 0); c.lineTo(Math.cos(a) * (r - 4), Math.sin(a) * (r - 4)); c.stroke();
+        c.beginPath(); c.moveTo(0, 0); c.lineTo(Math.cos(a) * (r - 8*s), Math.sin(a) * (r - 8*s)); c.stroke();
       }
       c.fillStyle = '#455660'; c.beginPath(); c.arc(0, 0, 4, 0, Math.PI * 2); c.fill(); c.restore();
     }
     c.shadowBlur = 0;
     c.lineJoin = 'round'; c.lineCap = 'round';
     c.strokeStyle = '#24323c'; c.lineWidth = 7 * s;
-    c.beginPath(); c.moveTo(-wx, wy); c.lineTo(-14*s, -4*s); c.lineTo(14*s, 4*s); c.lineTo(wx, wy); c.lineTo(-wx, wy); c.stroke();
+    const [rear, front] = axles;
+    c.beginPath(); c.moveTo(rear.x, rear.y); c.lineTo(-14*s, -4*s); c.lineTo(14*s, 4*s); c.lineTo(front.x, front.y); c.stroke();
     c.strokeStyle = spec.accent; c.lineWidth = 5 * s;
-    c.beginPath(); c.moveTo(-wx, wy); c.lineTo(14*s, 4*s); c.lineTo(-14*s, -4*s); c.lineTo(-wx, wy); c.stroke();
+    c.beginPath(); c.moveTo(rear.x, rear.y); c.lineTo(14*s, 4*s); c.lineTo(-14*s, -4*s); c.lineTo(rear.x, rear.y); c.stroke();
+    // Fork and swingarm follow the physical suspension instead of a rigid axle.
+    c.strokeStyle = '#ddf1e8'; c.lineWidth = 3*s;
+    c.beginPath(); c.moveTo(21*s, -11*s); c.lineTo(front.x, front.y); c.moveTo(-14*s, -4*s); c.lineTo(rear.x, rear.y); c.stroke();
     c.fillStyle = spec.color;
     c.beginPath(); c.moveTo(-23*s, -17*s); c.lineTo(5*s, -18*s); c.lineTo(25*s, -7*s); c.lineTo(14*s, 1*s); c.lineTo(-18*s, 0); c.closePath(); c.fill();
     c.fillStyle = '#293b46'; c.fillRect(-23*s, -24*s, 27*s, 6*s);
     c.strokeStyle = '#364954'; c.lineWidth = 4 * s;
-    c.beginPath(); c.moveTo(21*s, -11*s); c.lineTo(32*s, -26*s); c.lineTo(44*s, -24*s); c.stroke();
+    const stroke = (points: readonly (readonly [number, number])[]) => {
+      c.beginPath(); points.forEach(([x, y], i) => { if (i) c.lineTo(x*s, y*s); else c.moveTo(x*s, y*s); }); c.stroke();
+    };
+    stroke(G.handlebar);
     // Rider and helmet, entirely original vector art.
     c.strokeStyle = '#27354a'; c.lineWidth = 10 * s;
-    c.beginPath(); c.moveTo(-9*s, -26*s); c.lineTo(5*s, -15*s); c.lineTo(12*s, -6*s); c.stroke();
+    stroke(G.legs);
     c.strokeStyle = '#324a64'; c.lineWidth = 13 * s;
-    c.beginPath(); c.moveTo(-13*s, -44*s); c.lineTo(-7*s, -27*s); c.stroke();
+    c.beginPath(); c.moveTo(G.torso.ax*s, G.torso.ay*s); c.lineTo(G.torso.bx*s, G.torso.by*s); c.stroke();
     c.strokeStyle = '#f7d29d'; c.lineWidth = 6 * s;
-    c.beginPath(); c.moveTo(-10*s, -37*s); c.lineTo(12*s, -27*s); c.lineTo(31*s, -24*s); c.stroke();
-    c.fillStyle = '#213348'; c.beginPath(); c.arc(-16*s, -55*s, 13*s, 0, Math.PI * 2); c.fill();
+    stroke(G.arms);
+    c.fillStyle = '#213348'; c.beginPath(); c.arc(G.head.x*s, G.head.y*s, G.head.radius*s, 0, Math.PI * 2); c.fill();
     c.fillStyle = spec.accent; c.beginPath(); c.arc(-16*s, -55*s, 9*s, Math.PI * 1.08, Math.PI * 1.97); c.lineTo(-15*s, -55*s); c.closePath(); c.fill();
     c.fillStyle = '#94e1f2'; c.fillRect(-11*s, -58*s, 12*s, 5*s);
     c.restore();
