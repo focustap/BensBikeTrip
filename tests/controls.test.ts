@@ -13,7 +13,7 @@ test('desktop keys and touch holds produce identical physics, including combined
       const a = newBike(spec), b = newBike(spec);
       for (let i = 0; i < 40; i++) {
         const k = keyboard.sample(), t = touch.sample();
-        stepBike(a, k.lean, k.boost); stepBike(b, t.lean, t.boost);
+        stepBike(a, k.lean, k.boost, k.slam); stepBike(b, t.lean, t.boost, t.slam);
       }
       assert.deepEqual([a.x, a.y, a.angle, a.boost, a.dead], [b.x, b.y, b.angle, b.boost, b.dead]);
     }
@@ -24,12 +24,12 @@ test('multi-touch release, cancellation and pause reset cannot leave stuck input
   const c = new RideControls();
   c.pointer('back', 1, true); c.pointer('back', 2, true); c.pointer('boost', 3, true);
   c.pointer('back', 1, false);
-  assert.deepEqual(c.sample(), { lean: -1, boost: true });
+  assert.deepEqual(c.sample(), { lean: -1, boost: true, slam: false });
   c.pointer('forward', 4, true);
-  assert.deepEqual(c.sample(), { lean: 0, boost: true });
+  assert.deepEqual(c.sample(), { lean: 0, boost: true, slam: true });
   c.reset();
   c.pointer('forward', 4, false);
-  assert.deepEqual(c.sample(), { lean: 0, boost: false });
+  assert.deepEqual(c.sample(), { lean: 0, boost: false, slam: false });
   c.pointer('back', 5, true); c.pointer('back', 5, false);
   assert.equal(c.sample().lean, 0);
   for (const key of ['Space', 'KeyW', 'ArrowUp']) {

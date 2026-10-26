@@ -20,7 +20,7 @@
       <header class="brandline">
         <span class="brandmark">BT<span class="dot">.</span></span>
         <span class="brandline-label">A VERY QUESTIONABLE ADVENTURE</span>
-        <span class="version">EARLY BUILD <span>0.2</span></span>
+        <span class="version">EARLY BUILD <span>0.3</span></span>
       </header>
 
       <section id="menu" class="screen menu-screen">
@@ -37,7 +37,7 @@
             <div><span>TOTAL COINS</span><strong id="menu-coins">0 <small>◈</small></strong></div>
           </div>
         </div>
-        <div class="menu-tip">← LEAN BACK <span>·</span> LEAN FORWARD →<small>HOLD TO ROTATE · SPACE TO BOOST</small></div>
+        <div class="menu-tip">← LEAN BACK <span>·</span> LEAN FORWARD →<small>HOLD BOTH TO SLAM · LAND TRICKS FOR OVERBOOST</small></div>
       </section>
 
       <section id="garage-screen" class="screen garage-screen hidden">
@@ -52,6 +52,7 @@
         <div class="hud-left"><div class="hud-label">DISTANCE</div><div class="hud-distance"><span id="distance">0</span><small>m</small></div><div class="hud-sub">BEST <span id="best">0</span>m</div></div>
         <div class="hud-right"><div class="coin-hud"><span class="coin-symbol">◈</span><span id="run-coins">0</span></div><button id="pause" class="pause-btn" aria-label="Pause game">Ⅱ</button></div>
         <div class="boost-meter"><div class="boost-top"><span>BOOST</span><span id="boost-label">50%</span></div><div class="boost-track"><div id="boost-fill" class="boost-fill"></div></div></div>
+        <div id="overboost-meter" class="overboost-meter"><div class="boost-top"><span>OVERBOOST</span><span id="overboost-label">LAND TRICKS</span></div><div class="boost-track"><div id="overboost-fill" class="overboost-fill"></div></div></div>
         <div id="stunt" class="stunt hidden" role="status"></div>
         <div class="controls"><button id="lean-left" class="tilt tilt-left" aria-label="Lean backward"><span class="tilt-icon">↶</span><span>LEAN BACK</span></button><button id="boost" class="boost-button" aria-label="Boost"><span>⚡</span>BOOST</button><button id="lean-right" class="tilt tilt-right" aria-label="Lean forward"><span class="tilt-icon">↷</span><span>LEAN FORWARD</span></button></div>
       </section>

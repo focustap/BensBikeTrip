@@ -1,6 +1,6 @@
 import { Body, Chain, Circle, Polygon, Vec2, WheelJoint, World, type Fixture } from 'planck';
 import { BIKE_GEOMETRY as G } from './geometry';
-import { coinPosition, TERRAIN_STEP, terrainY } from './terrain';
+import { COIN_SPACING, COIN_START, COIN_VALUE, coinPosition, TERRAIN_STEP, terrainY } from './terrain';
 
 export interface BikeSpec {
   id: string;
@@ -24,6 +24,9 @@ export const BIKES: BikeSpec[] = [
 
 export const FIXED_DT = 1 / 120;
 export const PIXELS_PER_METER = 40;
+export const GRAVITY = 20;
+export const CRUISE_SPEED = 800;
+export const MAX_OVERBOOST = 8;
 const P = PIXELS_PER_METER;
 const CHUNK = 512;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -40,6 +43,11 @@ export interface BikeState extends Pose {
   airtime: number;
   airRotation: number;
   boost: number;
+  overboost: number;
+  wheelieTime: number;
+  slamming: boolean;
+  slamTime: number;
+  pendingLanding: { flip: number; airtime: number; slamTime: number } | null;
   totalCoins: number;
   distance: number;
   dead: boolean;
@@ -61,7 +69,7 @@ export interface BikeOptions {
 
 /** Three dynamic bodies. Planck alone integrates motion and resolves contact. */
 export class MotorcyclePhysics {
-  readonly world = new World(Vec2(0, 31.75));
+  readonly world = new World(Vec2(0, GRAVITY));
   readonly chassis: Body;
   readonly wheels: [Body, Body];
   readonly joints: [WheelJoint, WheelJoint];
@@ -82,7 +90,7 @@ export class MotorcyclePhysics {
     const angle = options.angle ?? Math.atan2(this.road(x + 40*s) - this.road(x - 40*s), 80*s);
     const y = options.y ?? this.road(x) - (G.axleY + G.tireRadius + 1)*s;
     this.chassis = this.world.createDynamicBody({
-      position: Vec2(x/P, y/P), angle, bullet: true, angularDamping: 1.25,
+      position: Vec2(x/P, y/P), angle, bullet: true, angularDamping: 1.8,
     });
     const fixture = (shape: Circle | Polygon, part: Part, density: number) =>
       this.chassis.createFixture(shape, { density, friction: 0.45, restitution: 0, filterGroupIndex: -1, userData: part });
@@ -119,7 +127,7 @@ export class MotorcyclePhysics {
       frequencyHz: 5.5, dampingRatio: 0.9, enableMotor: i === 0,
       motorSpeed: 0, maxMotorTorque: 0,
     }, this.chassis, wheel, wheel.getPosition(), this.chassis.getWorldVector(Vec2(0, 1))))!) as [WheelJoint, WheelJoint];
-    const velocity = Vec2((options.vx ?? 230)/P, (options.vy ?? 0)/P);
+    const velocity = Vec2((options.vx ?? CRUISE_SPEED*spec.power)/P, (options.vy ?? 0)/P);
     for (const body of [this.chassis, ...this.wheels]) {
       body.setLinearVelocity(velocity);
       body.setAngularVelocity(body === this.chassis ? options.av ?? 0 : velocity.x/(G.tireRadius*s/P));
@@ -168,17 +176,31 @@ export class MotorcyclePhysics {
     return { x: p.x*P + this.origin, y: p.y*P, angle: body.getAngle() };
   }
 
-  step(b: BikeState, lean: number, boost: boolean): void {
+  step(b: BikeState, lean: number, boost: boolean, slam: boolean): void {
     const s = this.spec.wheelScale;
-    const turbo = boost && b.boost > 0;
+    const overboost = b.overboost > 0;
+    const turbo = boost && !overboost && b.boost > 0;
     b.boost = clamp(b.boost + (turbo ? -34 : 1.35)*FIXED_DT, 0, 100);
+    b.overboost = Math.max(0, b.overboost-FIXED_DT);
     this.streamTerrain(b.x);
     // Motor torque is traction-limited by the tire contacts. No chassis thrust.
-    this.joints[0].setMotorSpeed(510*this.spec.power*(turbo ? 1.52 : 1)/(G.tireRadius*s));
-    this.joints[0].setMaxMotorTorque(120*s*s*s*(turbo ? 1.55 : 1));
+    const speedMultiplier = overboost ? 1.65 : turbo ? 1.25 : 1;
+    // Expiring boost should coast down, not brake the rear tire into the road.
+    const rollingSpeed = Math.max(0, this.chassis.getLinearVelocity().x*P);
+    const targetSpeed = Math.max(CRUISE_SPEED*this.spec.power*speedMultiplier, rollingSpeed);
+    this.joints[0].setMotorSpeed(targetSpeed/(G.tireRadius*s));
+    this.joints[0].setMaxMotorTorque(55*s*s*s*(overboost ? 1.45 : turbo ? 1.25 : 1));
     // Inertia-scaled torque keeps the tiny bike responsive too. Never an angle target.
-    const controlAcceleration = b.onGround ? 155/s : 110;
+    const controlAcceleration = b.onGround ? 100/s : 62;
     this.chassis.applyTorque(clamp(lean, -1, 1)*this.chassis.getInertia()*controlAcceleration*this.spec.handling, true);
+    b.slamming = slam && !b.onGround;
+    if (b.slamming) {
+      // Player-triggered downward force, shared across the assembly. Never a
+      // teleport or a launch impulse, and never pressed into a grounded tire.
+      for (const body of [this.chassis, ...this.wheels])
+        body.applyForceToCenter(Vec2(0, body.getMass()*GRAVITY*2.8), true);
+      b.slamTime += FIXED_DT;
+    }
     b.previous = { chassis: this.pose(this.chassis), wheels: this.wheels.map(w => this.pose(w)) as [Pose, Pose] };
     this.world.step(FIXED_DT, 8, 3);
     this.contacts.fill(false);
@@ -215,43 +237,73 @@ export function newBike(spec: BikeSpec = BIKES[0], options: BikeOptions = {}): B
   const pose = physics.pose(physics.chassis);
   const wheels = physics.wheels.map(w => ({ ...physics.pose(w), grounded: false })) as [WheelState, WheelState];
   return {
-    ...pose, vx: options.vx ?? 230, vy: options.vy ?? 0, av: options.av ?? 0, wheels,
+    ...pose, vx: options.vx ?? CRUISE_SPEED*spec.power, vy: options.vy ?? 0, av: options.av ?? 0, wheels,
     previous: { chassis: { ...pose }, wheels: [{ ...wheels[0] }, { ...wheels[1] }] },
-    onGround: false, airtime: 0, airRotation: 0, boost: 55, totalCoins: 0,
+    onGround: false, airtime: 0, airRotation: 0, boost: 55, overboost: 0, wheelieTime: 0,
+    slamming: false, slamTime: 0, pendingLanding: null, totalCoins: 0,
     distance: 0, dead: false, collected: new Set(), lastBonus: 0, physics,
   };
 }
 
 /** Called only with the shared fixed timestep by the animation loop and tests. */
-export function stepBike(b: BikeState, lean: number, boostPressed: boolean): { coin: number; flip: number; crashed: boolean; launch: boolean } {
-  if (b.dead) return { coin: 0, flip: 0, crashed: true, launch: false };
+export interface StepOutcome {
+  coin: number;
+  flip: number;
+  crashed: boolean;
+  launch: boolean;
+  overboostEarned: number;
+  stunt: 'flip' | 'air' | 'wheelie' | 'stoppie' | 'slam' | null;
+}
+export function stepBike(b: BikeState, lean: number, boostPressed: boolean, slamPressed = false): StepOutcome {
+  if (b.dead) return { coin: 0, flip: 0, crashed: true, launch: false, overboostEarned: 0, stunt: null };
   const wasGrounded = b.onGround, oldAngle = b.angle;
-  b.physics.step(b, lean, boostPressed);
+  b.physics.step(b, lean, boostPressed, slamPressed);
   const launch = wasGrounded && !b.onGround;
   let flip = 0;
+  let overboostEarned = 0;
+  let stunt: StepOutcome['stunt'] = null;
   // Include the landing step in rotation accounting; never wrap the angle.
   if (!wasGrounded || !b.onGround) b.airRotation += b.angle-oldAngle;
   if (!b.onGround) b.airtime += FIXED_DT;
   else {
     if (!wasGrounded && b.airtime > 0.25 && !b.dead) {
-      flip = Math.floor((Math.abs(b.airRotation) + 0.15)/(Math.PI*2));
-      if (flip) {
-        b.totalCoins += flip*30; b.boost = Math.min(100, b.boost + flip*38); b.lastBonus = flip;
-      }
+      b.pendingLanding = { flip: Math.floor((Math.abs(b.airRotation) + 0.15)/(Math.PI*2)), airtime: b.airtime, slamTime: b.slamTime };
     }
-    b.airtime = 0; b.airRotation = 0;
+    b.airtime = 0; b.airRotation = 0; b.slamTime = 0; b.slamming = false;
   }
+  // Confirm the landing on both tires before paying out. A rear-tire touch
+  // followed by a wipeout must not trigger the trick/overboost reward.
+  if (b.pendingLanding && b.wheels.every(wheel => wheel.grounded) && !b.dead) {
+    const landing = b.pendingLanding;
+    flip = landing.flip;
+    if (flip) { overboostEarned += flip*2.5; b.lastBonus = flip; stunt = 'flip'; }
+    if (landing.airtime >= 0.8) { overboostEarned += 1; stunt ??= 'air'; }
+    if (landing.slamTime >= 0.08) { overboostEarned += 1.5; stunt ??= 'slam'; }
+    b.pendingLanding = null;
+  }
+  if (b.dead) b.pendingLanding = null;
+  const [rear, front] = b.wheels;
+  const wheelie = rear.grounded !== front.grounded && Math.abs(rear.y-front.y) > 18*b.physics.spec.wheelScale && Math.abs(b.vx) > 300;
+  b.wheelieTime = wheelie && !b.dead ? b.wheelieTime + FIXED_DT : 0;
+  if (b.wheelieTime >= 0.85) {
+    overboostEarned += 1.25; b.wheelieTime -= 0.85;
+    stunt ??= rear.grounded ? 'wheelie' : 'stoppie';
+  }
+  if (!b.dead && overboostEarned) b.overboost = Math.min(MAX_OVERBOOST, b.overboost + overboostEarned);
   let coin = 0;
-  const nearIndex = Math.max(0, Math.floor((b.x-690)/235));
+  const nearIndex = Math.max(0, Math.floor((b.x-COIN_START)/COIN_SPACING));
+  const s = b.physics.spec.wheelScale;
+  const headX = b.x + (G.head.x*Math.cos(b.angle)-G.head.y*Math.sin(b.angle))*s;
+  const headY = b.y + (G.head.x*Math.sin(b.angle)+G.head.y*Math.cos(b.angle))*s;
   if (!b.dead) for (let i = Math.max(0, nearIndex-1); i <= nearIndex+2; i++) {
     if (b.collected.has(i)) continue;
     const p = coinPosition(i);
-    if (Math.hypot(p.x-b.x, p.y-b.y) < 75) {
-      b.collected.add(i); b.totalCoins += 10; b.boost = Math.min(100, b.boost+2); coin += 10;
+    if (Math.hypot(p.x-b.x, p.y-b.y) < 34*s || Math.hypot(p.x-headX, p.y-headY) < G.head.radius*s+17) {
+      b.collected.add(i); b.totalCoins += COIN_VALUE; coin += COIN_VALUE;
     }
   }
   b.distance = Math.max(b.distance, Math.floor(Math.max(0, b.x-145)/6));
-  return { coin, flip, crashed: b.dead, launch };
+  return { coin, flip, crashed: b.dead, launch, overboostEarned: b.dead ? 0 : overboostEarned, stunt: b.dead ? null : stunt };
 }
 
 /** Render one fixed step behind; chassis and both suspension poses interpolate. */

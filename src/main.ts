@@ -1,5 +1,5 @@
 import './style.css';
-import { BIKES, FIXED_DT, interpolateBike, newBike, stepBike, type BikeSpec, type BikeState } from './physics';
+import { BIKES, FIXED_DT, MAX_OVERBOOST, interpolateBike, newBike, stepBike, type BikeSpec, type BikeState } from './physics';
 import { GameRenderer } from './render';
 import { RideControls, type HoldAction } from './controls';
 
@@ -70,7 +70,7 @@ function ride(): void {
 }
 function crash(): void {
   // Distance bonus is kept even if all collectible coins were missed.
-  const distanceBonus = Math.floor(bike.distance / 100);
+  const distanceBonus = Math.floor(bike.distance / 1000);
   const earned = bike.totalCoins + distanceBonus;
   const newBest = bike.distance > save.best;
   save.coins += earned;
@@ -135,6 +135,9 @@ function bindHold(button: HTMLElement, action: HoldAction): void {
 bindHold($('lean-left'), 'back');
 bindHold($('lean-right'), 'forward');
 bindHold($('boost'), 'boost');
+// Safari can otherwise turn a held control label into a copy/selection callout.
+for (const name of ['contextmenu', 'selectstart', 'dragstart'])
+  $('app').addEventListener(name, event => event.preventDefault());
 window.addEventListener('keydown', event => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'Space', 'ArrowUp', 'Escape'].includes(event.code)) event.preventDefault();
   if (event.code === 'Escape') {
@@ -158,6 +161,9 @@ function hudUpdate(): void {
   $('run-coins').textContent = bike.totalCoins.toLocaleString();
   $('boost-fill').style.width = `${Math.round(bike.boost)}%`;
   $('boost-label').textContent = `${Math.round(bike.boost)}%`;
+  $('overboost-fill').style.width = `${bike.overboost/MAX_OVERBOOST*100}%`;
+  $('overboost-label').textContent = bike.overboost > 0 ? `${bike.overboost.toFixed(1)}s · FAST!` : 'LAND TRICKS';
+  $('overboost-meter').classList.toggle('active', bike.overboost > 0);
 }
 
 function frame(time: number): void {
@@ -170,14 +176,16 @@ function frame(time: number): void {
     let loops = 0;
     while (accumulator >= FIXED_DT && loops++ < 8) {
       const input = controls.sample();
-      const outcome = stepBike(bike, input.lean, input.boost);
-      if (outcome.launch) {
+      const outcome = stepBike(bike, input.lean, input.boost, input.slam);
+      if (bike.airtime >= 0.65 && bike.airtime < 0.65 + FIXED_DT) {
         $('stunt').textContent = 'BIG AIR!';
         $('stunt').classList.remove('hidden');
         toastUntil = gameTime + 0.8;
       }
-      if (outcome.flip) {
-        $('stunt').textContent = outcome.flip === 1 ? 'FULL FLIP!  +30 ◈' : `${outcome.flip}x FLIP COMBO!  +${outcome.flip * 30} ◈`;
+      if (outcome.stunt) {
+        const label = outcome.stunt === 'flip' ? (outcome.flip === 1 ? 'FULL FLIP!' : `${outcome.flip}x FLIP!`)
+          : { air: 'BIG AIR!', slam: 'SLAM!', wheelie: 'WHEELIE!', stoppie: 'STOPPIE!' }[outcome.stunt];
+        $('stunt').textContent = `${label} OVERBOOST +${outcome.overboostEarned.toFixed(1)}s`;
         $('stunt').classList.remove('hidden');
         toastUntil = gameTime + 1.65;
       }
