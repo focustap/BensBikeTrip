@@ -1,6 +1,6 @@
 import type { BikeSpec, BikeState } from './physics';
 import { BIKE_GEOMETRY as G } from './geometry';
-import { coinPosition, seeded, TERRAIN_STEP, terrainSlope, terrainY } from './terrain';
+import { COIN_SPACING, COIN_START, coinPosition, seeded, TERRAIN_STEP, terrainSlope, terrainY } from './terrain';
 
 const H = 720;
 export class GameRenderer {
@@ -10,6 +10,7 @@ export class GameRenderer {
   private dpr = 1;
   private scale = 1;
   private camera = 0;
+  private cameraY = 0;
   private time = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -32,6 +33,8 @@ export class GameRenderer {
   frame(bike: BikeState, spec: BikeSpec, elapsed: number, running: boolean): void {
     this.time += elapsed;
     this.camera = Math.max(0, bike.x - this.width * (running ? 0.31 : 0.69));
+    const targetY = running ? Math.min(0, bike.y - 220) : 0;
+    this.cameraY += (targetY-this.cameraY)*(1-Math.exp(-elapsed*6));
     const c = this.ctx;
     c.setTransform(this.dpr * this.scale, 0, 0, this.dpr * this.scale, 0, 0);
     c.clearRect(0, 0, this.width, this.height);
@@ -41,7 +44,7 @@ export class GameRenderer {
     this.clouds();
     this.mountains(0.38, 556, '#8db9b0', 75);
     c.save();
-    c.translate(-this.camera, 0);
+    c.translate(-this.camera, -this.cameraY);
     this.drawTerrain();
     this.drawDetails();
     this.drawCoins(bike);
@@ -154,8 +157,8 @@ export class GameRenderer {
 
   private drawCoins(bike: BikeState): void {
     const c = this.ctx;
-    const first = Math.max(0, Math.floor((this.camera - 690) / 235) - 1);
-    const last = Math.max(first, Math.ceil((this.camera + this.width - 690) / 235) + 1);
+    const first = Math.max(0, Math.floor((this.camera - COIN_START) / COIN_SPACING) - 1);
+    const last = Math.max(first, Math.ceil((this.camera + this.width - COIN_START) / COIN_SPACING) + 1);
     for (let i = first; i <= last; i++) {
       if (bike.collected.has(i)) continue;
       const pos = coinPosition(i);
@@ -172,8 +175,20 @@ export class GameRenderer {
 
   private drawBike(b: BikeState, spec: BikeSpec): void {
     const c = this.ctx;
-    c.save(); c.translate(b.x, b.y); c.rotate(b.angle);
+    c.save(); c.translate(b.x, b.y);
+    if (b.slamming) {
+      c.strokeStyle = 'rgba(255,247,201,.8)'; c.lineWidth = 3;
+      for (const x of [-30, 30]) { c.beginPath(); c.moveTo(x, -85); c.lineTo(x, -25); c.stroke(); }
+    }
+    c.rotate(b.angle);
     const s = spec.wheelScale;
+    if (b.overboost > 0) {
+      const length = (32 + Math.sin(this.time*45)*9)*s;
+      c.fillStyle = '#f5894e'; c.beginPath();
+      c.moveTo(-22*s, -13*s); c.lineTo(-34*s-length, -8*s); c.lineTo(-24*s, -2*s); c.fill();
+      c.fillStyle = '#ffe2a1'; c.beginPath();
+      c.moveTo(-23*s, -10*s); c.lineTo(-30*s-length*0.7, -7*s); c.lineTo(-24*s, -5*s); c.fill();
+    }
     const r = G.tireRadius * s;
     const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
     const axles = b.wheels.map(w => ({

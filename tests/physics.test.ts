@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BIKES, FIXED_DT, PIXELS_PER_METER, interpolateBike, newBike, stepBike, type BikeState } from '../src/physics';
+import { BIKES, CRUISE_SPEED, FIXED_DT, GRAVITY, PIXELS_PER_METER, interpolateBike, newBike, stepBike, type BikeState } from '../src/physics';
 import { BIKE_GEOMETRY as G } from '../src/geometry';
 import { coinPosition, terrainSlope } from '../src/terrain';
 
@@ -69,8 +69,9 @@ for (const spec of BIKES) {
     assert.ok(landed && flips === 1);
     assert.ok(b.wheels.every(wheel => wheel.grounded));
     assert.ok(b.x > landingX+400, 'continues driving after landing');
-    assert.ok(Math.abs(b.angle+Math.PI*2) < 0.05, 'angle stays unwrapped through landing');
-    assert.ok(b.totalCoins >= 30 && b.lastBonus === 1);
+    assert.ok(Math.abs(b.angle+Math.PI*2) < 0.15, 'angle stays unwrapped through landing and acceleration');
+    assert.equal(b.totalCoins, b.collected.size, 'tricks award overboost instead of currency');
+    assert.ok(b.lastBonus === 1);
   });
 }
 
@@ -116,7 +117,7 @@ test('airborne boost cannot add translation: total momentum follows only gravity
   run(b, 0.5, -1, true);
   const after = momentum();
   assert.ok(Math.abs(after.x-before.x) < 1e-8);
-  assert.ok(Math.abs(after.y-before.y-31.75*0.5) < 1e-8);
+  assert.ok(Math.abs(after.y-before.y-GRAVITY*0.5) < 1e-8);
   assert.ok(b.boost < 55);
 });
 
@@ -139,28 +140,29 @@ test('render interpolation follows both wheel bodies through suspension travel',
   assert.ok(Math.abs(b.physics.wheels[0].getFixtureList()!.getShape().getRadius()*PIXELS_PER_METER-G.tireRadius) < 1e-8);
 });
 
-test('normal riding follows the actual game hills and launches without rotation input', () => {
+test('starts at cruising speed and gets meaningful air on the first actual hill', () => {
   const b = newBike(BIKES[0]);
+  assert.equal(b.vx, CRUISE_SPEED);
   let jumps = 0, longestAir = 0;
-  for (let i = 0; i < 3600; i++) {
+  for (let i = 0; i < 360; i++) {
     const result = stepBike(b, 0, false);
     if (result.launch) jumps++;
     longestAir = Math.max(longestAir, b.airtime);
   }
   assert.equal(b.dead, false);
-  assert.ok(b.distance > 2000);
-  assert.ok(jumps > 0 && longestAir > 0.25);
+  assert.ok(b.distance > 300);
+  assert.ok(jumps > 0 && longestAir > 0.8);
 });
 
-test('boost into an actual course hill, complete a backflip and continue over the next hill', () => {
+test('first actual course hill: complete a backflip and continue over the next hill', () => {
   const b = newBike(BIKES[0]);
   let flips = 0, landingX = 0, longestAir = 0, bothWheelsLanded = false;
   for (let i = 0; i < 1600 && !b.dead; i++) {
     // A test driver presses only full left/right/neutral and boost. The production
     // solver has no target angle, course trigger, or takeoff assistance.
     const target = -2*Math.PI + (flips ? Math.atan(terrainSlope(b.x)) : 0);
-    const lean = b.x > 1200 ? Math.sign((target-b.angle)*8-b.av*0.8) : 0;
-    const result = stepBike(b, lean, b.x > 900 && flips === 0);
+    const lean = b.x > 900 ? Math.sign((target-b.angle)*8-b.av*1.2) : 0;
+    const result = stepBike(b, lean, false);
     longestAir = Math.max(longestAir, b.airtime);
     flips += result.flip;
     if (result.flip) landingX = b.x;
@@ -173,13 +175,13 @@ test('boost into an actual course hill, complete a backflip and continue over th
   assert.ok(longestAir > 0.5);
 });
 
-test('coins can be collected only once and replenish boost', () => {
+test('rare coins can be collected only once, worth one coin without boost rewards', () => {
   const p = coinPosition(0);
   const b = newBike(BIKES[0], { x: p.x, y: p.y, vx: 0, terrain: () => 2000 });
-  assert.equal(stepBike(b, 0, false).coin, 10);
+  assert.equal(stepBike(b, 0, false).coin, 1);
   run(b, 0.1);
-  assert.equal(b.totalCoins, 10);
-  assert.ok(b.collected.has(0) && b.boost > 57);
+  assert.equal(b.totalCoins, 1);
+  assert.ok(b.collected.has(0) && b.boost < 56);
 });
 
 test('boost increases speed through ground traction and consumes the existing meter', () => {

@@ -17,11 +17,14 @@ export class RideControls {
     for (const pointers of Object.values(this.pointers)) pointers.clear();
   }
 
-  sample(): { lean: number; boost: boolean } {
+  sample(): { lean: number; boost: boolean; slam: boolean } {
     const held = (action: HoldAction, codes: string[]) => this.pointers[action].size > 0 || codes.some(code => this.keys.has(code));
+    const back = held('back', ['KeyA', 'ArrowLeft']);
+    const forward = held('forward', ['KeyD', 'ArrowRight']);
     return {
-      lean: Number(held('forward', ['KeyD', 'ArrowRight']))-Number(held('back', ['KeyA', 'ArrowLeft'])),
+      lean: Number(forward)-Number(back),
       boost: held('boost', ['KeyW', 'ArrowUp', 'Space']),
+      slam: (back && forward) || this.keys.has('KeyS') || this.keys.has('ArrowDown'),
     };
   }
 }
