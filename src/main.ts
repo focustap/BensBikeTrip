@@ -1,6 +1,7 @@
 import './style.css';
-import { BIKES, newBike, stepBike, type BikeSpec, type BikeState } from './physics';
+import { BIKES, FIXED_DT, interpolateBike, newBike, stepBike, type BikeSpec, type BikeState } from './physics';
 import { GameRenderer } from './render';
+import { RideControls, type HoldAction } from './controls';
 
 type Screen = 'menu' | 'garage' | 'play' | 'pause' | 'crash';
 interface SaveData { coins: number; best: number; owned: string[]; selected: string }
@@ -27,13 +28,10 @@ let save = loadSave();
 if (!save.owned.includes(save.selected)) save.selected = 'trail';
 function persist(): void { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch { /* private browsing */ } }
 let screen: Screen = 'menu';
-let bike: BikeState = newBike();
 let spec: BikeSpec = BIKES.find(b => b.id === save.selected)!;
+let bike: BikeState = newBike(spec);
 const renderer = new GameRenderer($<HTMLCanvasElement>('world'));
-const keyDown = new Set<string>();
-let touchLeft = false;
-let touchRight = false;
-let touchBoost = false;
+const controls = new RideControls();
 let toastUntil = 0;
 let lastTime = 0;
 let accumulator = 0;
@@ -44,6 +42,7 @@ const screens: Record<string, HTMLElement> = {
   menu: $('menu'), garage: $('garage-screen'), hud: $('hud'), pause: $('pause-screen'), crash: $('crash-screen'),
 };
 function show(next: Screen): void {
+  accumulator = 0;
   screen = next;
   for (const [name, node] of Object.entries(screens)) {
     const visible = name === next || (name === 'hud' && (next === 'play' || next === 'pause'));
@@ -52,17 +51,21 @@ function show(next: Screen): void {
   if (next === 'menu') {
     $('menu-best').textContent = `${save.best.toLocaleString()} m`;
     $('menu-coins').innerHTML = `${save.coins.toLocaleString()} <small>◈</small>`;
-    bike = newBike();
+    bike = newBike(spec);
   }
   if (next === 'garage') renderGarage();
   if (next !== 'play') resetControls();
 }
-function resetControls(): void { touchLeft = touchRight = touchBoost = false; keyDown.clear(); }
+function resetControls(): void { controls.reset(); }
 function ride(): void {
   spec = BIKES.find(b => b.id === save.selected) ?? BIKES[0];
-  bike = newBike(spec.wheelScale);
+  bike = newBike(spec);
   accumulator = 0;
   gameTime = 0;
+  hudTick = 0;
+  toastUntil = 0;
+  $('stunt').classList.add('hidden');
+  hudUpdate();
   show('play');
 }
 function crash(): void {
@@ -117,20 +120,23 @@ $('bike-list').addEventListener('click', event => {
   renderGarage();
 });
 
-function bindHold(button: HTMLElement, setter: (on: boolean) => void): void {
+function bindHold(button: HTMLElement, action: HoldAction): void {
   button.addEventListener('pointerdown', event => {
+    if (screen !== 'play') return;
     event.preventDefault();
-    setter(true);
+    controls.pointer(action, event.pointerId, true);
     button.setPointerCapture(event.pointerId);
   });
-  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(name, () => setter(false));
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) button.addEventListener(name, event => {
+    controls.pointer(action, event.pointerId, false);
+  });
   button.addEventListener('contextmenu', event => event.preventDefault());
 }
-bindHold($('lean-left'), value => { touchLeft = value; });
-bindHold($('lean-right'), value => { touchRight = value; });
-bindHold($('boost'), value => { touchBoost = value; });
+bindHold($('lean-left'), 'back');
+bindHold($('lean-right'), 'forward');
+bindHold($('boost'), 'boost');
 window.addEventListener('keydown', event => {
-  if (['ArrowLeft', 'ArrowRight', 'Space', 'ArrowUp', 'Escape'].includes(event.code)) event.preventDefault();
+  if (['ArrowLeft', 'ArrowRight', 'ArrowDown', 'Space', 'ArrowUp', 'Escape'].includes(event.code)) event.preventDefault();
   if (event.code === 'Escape') {
     if (screen === 'play') show('pause');
     else if (screen === 'pause') show('play');
@@ -138,9 +144,9 @@ window.addEventListener('keydown', event => {
     return;
   }
   if (event.code === 'Enter' && screen === 'menu') ride();
-  keyDown.add(event.code);
+  if (screen === 'play') controls.key(event.code, true);
 });
-window.addEventListener('keyup', event => keyDown.delete(event.code));
+window.addEventListener('keyup', event => controls.key(event.code, false));
 window.addEventListener('blur', () => { resetControls(); if (screen === 'play') show('pause'); });
 document.addEventListener('visibilitychange', () => { if (document.hidden && screen === 'play') show('pause'); });
 window.addEventListener('resize', () => renderer.resize());
@@ -162,11 +168,9 @@ function frame(time: number): void {
     gameTime += elapsed;
     accumulator += elapsed;
     let loops = 0;
-    while (accumulator >= 1 / 120 && loops++ < 8) {
-      const back = touchLeft || keyDown.has('KeyA') || keyDown.has('ArrowLeft');
-      const forward = touchRight || keyDown.has('KeyD') || keyDown.has('ArrowRight');
-      const turbo = touchBoost || keyDown.has('Space') || keyDown.has('ArrowUp');
-      const outcome = stepBike(bike, spec, 1 / 120, Number(forward) - Number(back), turbo);
+    while (accumulator >= FIXED_DT && loops++ < 8) {
+      const input = controls.sample();
+      const outcome = stepBike(bike, input.lean, input.boost);
       if (outcome.launch) {
         $('stunt').textContent = 'BIG AIR!';
         $('stunt').classList.remove('hidden');
@@ -178,13 +182,14 @@ function frame(time: number): void {
         toastUntil = gameTime + 1.65;
       }
       if (outcome.crashed) { crash(); break; }
-      accumulator -= 1 / 120;
+      accumulator -= FIXED_DT;
     }
     if (gameTime > toastUntil) $('stunt').classList.add('hidden');
     hudTick += elapsed;
     if (hudTick > 0.06) { hudUpdate(); hudTick = 0; }
   }
-  renderer.frame(bike, spec, elapsed, screen === 'play' || screen === 'pause' || screen === 'crash');
+  renderer.frame(screen === 'play' ? interpolateBike(bike, accumulator/FIXED_DT) : bike,
+    spec, elapsed, screen === 'play' || screen === 'pause' || screen === 'crash');
   requestAnimationFrame(frame);
 }
 show('menu');
