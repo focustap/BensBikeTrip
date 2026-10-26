@@ -177,15 +177,10 @@ function frame(time: number): void {
     while (accumulator >= FIXED_DT && loops++ < 8) {
       const input = controls.sample();
       const outcome = stepBike(bike, input.lean, input.boost, input.slam);
-      if (bike.airtime >= 0.65 && bike.airtime < 0.65 + FIXED_DT) {
-        $('stunt').textContent = 'BIG AIR!';
-        $('stunt').classList.remove('hidden');
-        toastUntil = gameTime + 0.8;
-      }
-      if (outcome.stunt) {
-        const label = outcome.stunt === 'flip' ? (outcome.flip === 1 ? 'FULL FLIP!' : `${outcome.flip}x FLIP!`)
-          : { air: 'BIG AIR!', slam: 'SLAM!', wheelie: 'WHEELIE!', stoppie: 'STOPPIE!' }[outcome.stunt];
-        $('stunt').textContent = `${label} OVERBOOST +${outcome.overboostEarned.toFixed(1)}s`;
+      if (outcome.callout) {
+        const bonus = outcome.overboostEarned ? ` · OVERBOOST +${outcome.overboostEarned.toFixed(1)}s`
+          : outcome.boostEarned ? ` · BOOST +${outcome.boostEarned}` : '';
+        $('stunt').textContent = `${outcome.callout}${bonus}`;
         $('stunt').classList.remove('hidden');
         toastUntil = gameTime + 1.65;
       }

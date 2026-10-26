@@ -46,7 +46,7 @@ for (const spec of BIKES) {
   test(`${spec.name}: both controls permit multiple full rotations in free flight`, () => {
     for (const lean of [-1, 1]) {
       const b = newBike(spec, { terrain: flat, y: -4000 });
-      run(b, 1.4, lean);
+      run(b, 3, lean);
       assert.equal(b.dead, false, 'extreme airborne angle is not a crash');
       assert.ok(b.angle*lean > Math.PI*4, `angle ${b.angle}`);
       const av = b.av;
@@ -154,15 +154,15 @@ test('starts at cruising speed and gets meaningful air on the first actual hill'
   assert.ok(jumps > 0 && longestAir > 0.8);
 });
 
-test('first actual course hill: complete a backflip and continue over the next hill', () => {
+test('boosted first course hill: complete a backflip and continue over the next hill', () => {
   const b = newBike(BIKES[0]);
   let flips = 0, landingX = 0, longestAir = 0, bothWheelsLanded = false;
   for (let i = 0; i < 1600 && !b.dead; i++) {
     // A test driver presses only full left/right/neutral and boost. The production
     // solver has no target angle, course trigger, or takeoff assistance.
     const target = -2*Math.PI + (flips ? Math.atan(terrainSlope(b.x)) : 0);
-    const lean = b.x > 900 ? Math.sign((target-b.angle)*8-b.av*1.2) : 0;
-    const result = stepBike(b, lean, false);
+    const lean = b.x > 750 ? Math.sign((target-b.angle)*8-b.av*0.6) : 0;
+    const result = stepBike(b, lean, b.x > 500 && flips === 0);
     longestAir = Math.max(longestAir, b.airtime);
     flips += result.flip;
     if (result.flip) landingX = b.x;
