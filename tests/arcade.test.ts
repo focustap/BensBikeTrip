@@ -35,6 +35,37 @@ test('short air taps are gentle while held controls still accumulate rotation', 
   assert.ok(b.angle < angle, 'release preserves momentum instead of snapping upright');
 });
 
+test('released tilt has only a short follow-through for every bike and both directions', () => {
+  for (const spec of BIKES) for (const lean of [-1, 1]) {
+    const b = newBike(spec, { y: -4000, terrain: flat });
+    run(b, 0.5, lean);
+    const angle = b.angle, speed = Math.abs(b.av);
+    assert.ok(speed > 2, 'holding input still builds useful spin');
+    run(b, 0.3);
+    const followThrough = (b.angle-angle)*lean;
+    assert.ok(followThrough > 0.02 && followThrough < 0.25, `follow-through ${followThrough}`);
+    assert.ok(Math.abs(b.av) < 0.12, `residual spin ${b.av}`);
+  }
+});
+
+test('real rigid-body rotation produces FRONT FLIP x4 and BACKFLIP x3 with immediate boost', () => {
+  for (const [lean, count, label] of [[1, 4, 'FRONT FLIP x4'], [-1, 3, 'BACKFLIP x3']] as const) {
+    const b = newBike(BIKES[0], { y: -20000, terrain: flat });
+    let callout: string | null = null, boost = 0;
+    for (let i=0; i<900; i++) {
+      const result = stepBike(b, lean, false);
+      boost += result.boostEarned;
+      if (result.callout) callout = result.callout;
+      if ((lean > 0 ? result.frontFlips : result.backFlips) >= count) break;
+    }
+    assert.equal(b.dead, false);
+    assert.equal(callout, label);
+    assert.equal(boost, 18*count);
+    assert.equal(b.boost, 100);
+    assert.equal(b.overboost, 0, 'overboost is banked until a surviving landing');
+  }
+});
+
 test('landing a flip starts automatic overboost without a boost-button press', () => {
   const b = newBike(BIKES[0], { y: -1000, vx: 400, terrain: flat });
   for (let i = 0; i < 600 && !b.dead; i++) {

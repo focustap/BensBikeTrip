@@ -1,4 +1,4 @@
-const CACHE = 'bens-bike-trip-v4-overboost';
+const CACHE = 'bens-bike-trip-v5-stunt-control';
 const ROOT = '/BensBikeTrip/';
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([ROOT, ROOT + 'manifest.webmanifest', ROOT + 'icon.svg'])).then(() => self.skipWaiting()));

@@ -1,5 +1,6 @@
 import { Body, Chain, Circle, Polygon, Vec2, WheelJoint, World, type Fixture } from 'planck';
 import { BIKE_GEOMETRY as G } from './geometry';
+import { StuntTracker, type StuntResult } from './stunts';
 import { COIN_SPACING, COIN_START, COIN_VALUE, coinPosition, TERRAIN_STEP, terrainY } from './terrain';
 
 export interface BikeSpec {
@@ -44,10 +45,8 @@ export interface BikeState extends Pose {
   airRotation: number;
   boost: number;
   overboost: number;
-  wheelieTime: number;
   slamming: boolean;
-  slamTime: number;
-  pendingLanding: { flip: number; airtime: number; slamTime: number } | null;
+  stunts: StuntTracker;
   totalCoins: number;
   distance: number;
   dead: boolean;
@@ -191,15 +190,18 @@ export class MotorcyclePhysics {
     this.joints[0].setMotorSpeed(targetSpeed/(G.tireRadius*s));
     this.joints[0].setMaxMotorTorque(55*s*s*s*(overboost ? 1.45 : turbo ? 1.25 : 1));
     // Inertia-scaled torque keeps the tiny bike responsive too. Never an angle target.
-    const controlAcceleration = b.onGround ? 100/s : 62;
-    this.chassis.applyTorque(clamp(lean, -1, 1)*this.chassis.getInertia()*controlAcceleration*this.spec.handling, true);
+    const input = clamp(lean, -1, 1);
+    const controlAcceleration = b.onGround ? 100/s : 38;
+    // Released air controls act as rotational drag, leaving a short follow-through
+    // without selecting an angle or clamping rotation. Wheels keep rolling freely.
+    const airDrag = b.onGround ? 0 : input ? 3 : 70;
+    this.chassis.applyTorque(this.chassis.getInertia()*(input*controlAcceleration*this.spec.handling - airDrag*b.av), true);
     b.slamming = slam && !b.onGround;
     if (b.slamming) {
       // Player-triggered downward force, shared across the assembly. Never a
       // teleport or a launch impulse, and never pressed into a grounded tire.
       for (const body of [this.chassis, ...this.wheels])
         body.applyForceToCenter(Vec2(0, body.getMass()*GRAVITY*2.8), true);
-      b.slamTime += FIXED_DT;
     }
     b.previous = { chassis: this.pose(this.chassis), wheels: this.wheels.map(w => this.pose(w)) as [Pose, Pose] };
     this.world.step(FIXED_DT, 8, 3);
@@ -239,60 +241,41 @@ export function newBike(spec: BikeSpec = BIKES[0], options: BikeOptions = {}): B
   return {
     ...pose, vx: options.vx ?? CRUISE_SPEED*spec.power, vy: options.vy ?? 0, av: options.av ?? 0, wheels,
     previous: { chassis: { ...pose }, wheels: [{ ...wheels[0] }, { ...wheels[1] }] },
-    onGround: false, airtime: 0, airRotation: 0, boost: 55, overboost: 0, wheelieTime: 0,
-    slamming: false, slamTime: 0, pendingLanding: null, totalCoins: 0,
+    onGround: false, airtime: 0, airRotation: 0, boost: 55, overboost: 0,
+    slamming: false, stunts: new StuntTracker(pose.angle), totalCoins: 0,
     distance: 0, dead: false, collected: new Set(), lastBonus: 0, physics,
   };
 }
 
-/** Called only with the shared fixed timestep by the animation loop and tests. */
-export interface StepOutcome {
+export interface StepOutcome extends StuntResult {
   coin: number;
-  flip: number;
   crashed: boolean;
   launch: boolean;
-  overboostEarned: number;
-  stunt: 'flip' | 'air' | 'wheelie' | 'stoppie' | 'slam' | null;
 }
+/** Called only with the shared fixed timestep by the animation loop and tests. */
 export function stepBike(b: BikeState, lean: number, boostPressed: boolean, slamPressed = false): StepOutcome {
-  if (b.dead) return { coin: 0, flip: 0, crashed: true, launch: false, overboostEarned: 0, stunt: null };
+  if (b.dead) return { coin: 0, flip: 0, crashed: true, launch: false, overboostEarned: 0,
+    boostEarned: 0, frontFlips: b.stunts.frontFlips, backFlips: b.stunts.backFlips, stunt: null, callout: null };
   const wasGrounded = b.onGround, oldAngle = b.angle;
   b.physics.step(b, lean, boostPressed, slamPressed);
   const launch = wasGrounded && !b.onGround;
-  let flip = 0;
-  let overboostEarned = 0;
-  let stunt: StepOutcome['stunt'] = null;
   // Include the landing step in rotation accounting; never wrap the angle.
   if (!wasGrounded || !b.onGround) b.airRotation += b.angle-oldAngle;
   if (!b.onGround) b.airtime += FIXED_DT;
-  else {
-    if (!wasGrounded && b.airtime > 0.25 && !b.dead) {
-      b.pendingLanding = { flip: Math.floor((Math.abs(b.airRotation) + 0.15)/(Math.PI*2)), airtime: b.airtime, slamTime: b.slamTime };
-    }
-    b.airtime = 0; b.airRotation = 0; b.slamTime = 0; b.slamming = false;
-  }
-  // Confirm the landing on both tires before paying out. A rear-tire touch
-  // followed by a wipeout must not trigger the trick/overboost reward.
-  if (b.pendingLanding && b.wheels.every(wheel => wheel.grounded) && !b.dead) {
-    const landing = b.pendingLanding;
-    flip = landing.flip;
-    if (flip) { overboostEarned += flip*2.5; b.lastBonus = flip; stunt = 'flip'; }
-    if (landing.airtime >= 0.8) { overboostEarned += 1; stunt ??= 'air'; }
-    if (landing.slamTime >= 0.08) { overboostEarned += 1.5; stunt ??= 'slam'; }
-    b.pendingLanding = null;
-  }
-  if (b.dead) b.pendingLanding = null;
+  else { b.airtime = 0; b.airRotation = 0; }
   const [rear, front] = b.wheels;
-  const wheelie = rear.grounded !== front.grounded && Math.abs(rear.y-front.y) > 18*b.physics.spec.wheelScale && Math.abs(b.vx) > 300;
-  b.wheelieTime = wheelie && !b.dead ? b.wheelieTime + FIXED_DT : 0;
-  if (b.wheelieTime >= 0.85) {
-    overboostEarned += 1.25; b.wheelieTime -= 0.85;
-    stunt ??= rear.grounded ? 'wheelie' : 'stoppie';
-  }
-  if (!b.dead && overboostEarned) b.overboost = Math.min(MAX_OVERBOOST, b.overboost + overboostEarned);
+  const wheelie = rear.grounded !== front.grounded && Math.abs(rear.y-front.y) > 18*b.physics.spec.wheelScale && Math.abs(b.vx) > 300
+    ? rear.grounded ? 'wheelie' : 'stoppie' : null;
+  const s = b.physics.spec.wheelScale;
+  const clearance = Math.min(...b.wheels.map(wheel => b.physics.road(wheel.x)-wheel.y-G.tireRadius*s));
+  const reward = b.stunts.update({ angle: b.angle, av: b.av, airborne: !b.onGround,
+    bothGrounded: rear.grounded && front.grounded, wheelie, clearance, slamming: b.slamming, dead: b.dead }, FIXED_DT);
+  b.boost = Math.min(100, b.boost+reward.boostEarned);
+  b.overboost = Math.min(MAX_OVERBOOST, b.overboost+reward.overboostEarned);
+  if (reward.flip) b.lastBonus = reward.flip;
+  if (b.onGround) b.slamming = false;
   let coin = 0;
   const nearIndex = Math.max(0, Math.floor((b.x-COIN_START)/COIN_SPACING));
-  const s = b.physics.spec.wheelScale;
   const headX = b.x + (G.head.x*Math.cos(b.angle)-G.head.y*Math.sin(b.angle))*s;
   const headY = b.y + (G.head.x*Math.sin(b.angle)+G.head.y*Math.cos(b.angle))*s;
   if (!b.dead) for (let i = Math.max(0, nearIndex-1); i <= nearIndex+2; i++) {
@@ -303,7 +286,7 @@ export function stepBike(b: BikeState, lean: number, boostPressed: boolean, slam
     }
   }
   b.distance = Math.max(b.distance, Math.floor(Math.max(0, b.x-145)/6));
-  return { coin, flip, crashed: b.dead, launch, overboostEarned: b.dead ? 0 : overboostEarned, stunt: b.dead ? null : stunt };
+  return { coin, crashed: b.dead, launch, ...reward };
 }
 
 /** Render one fixed step behind; chassis and both suspension poses interpolate. */
